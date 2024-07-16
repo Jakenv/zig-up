@@ -1,6 +1,6 @@
 use core::fmt;
 use serde::Deserialize;
-use std::{fmt::Result, process::Command};
+use std::process::{Command, Stdio};
 
 use inquire::Select;
 
@@ -42,6 +42,26 @@ impl fmt::Display for MenuInsideMenu {
     }
 }
 
+#[warn(non_camel_case_types)]
+#[derive(Debug, Copy, Clone)]
+enum Architecture {
+    x86_64_macos,
+    aarch64_macos,
+}
+
+impl Architecture {
+    const VARIANTS_MORE_MORE: &'static [Architecture] = &[Self::x86_64_macos, Self::aarch64_macos];
+}
+
+impl fmt::Display for Architecture {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::x86_64_macos => write!(f, "x86_64-macos"),
+            Self::aarch64_macos => write!(f, "aarch64_macos"),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Obj {
     master: Master,
@@ -49,9 +69,12 @@ struct Obj {
 
 #[derive(Debug, Deserialize)]
 struct Master {
-    version: String,
     #[serde(rename = "x86_64-macos")]
     x86_64_macos: Platform,
+    #[serde(rename = "aarch64-macos")]
+    aarch64_macos: Platform,
+    #[serde(rename = "x86_64-linux")]
+    x86_64_linux: Platform,
 }
 
 #[derive(Deserialize, Debug)]
@@ -59,10 +82,39 @@ struct Platform {
     tarball: String,
 }
 
-fn get_latest() {
+fn get_latest(archi: &str) {
     let response = reqwest::blocking::get(ZIG_LINK).unwrap();
     let var: Obj = response.json().unwrap();
-    println!("{:#?}", var);
+    match archi {
+        "linux" => {
+            Command::new("wget")
+                .arg(var.master.x86_64_linux.tarball)
+                .arg("--progress=bar:force:noscroll")
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .spawn()
+                .expect("Failed");
+        }
+        "x86" => {
+            Command::new("wget")
+                .arg(var.master.x86_64_macos.tarball)
+                .arg("--progress=bar:force:noscroll")
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .spawn()
+                .expect("Failed");
+        }
+        "arm" => {
+            Command::new("wget")
+                .arg(var.master.aarch64_macos.tarball)
+                .arg("--progress=bar:force:noscroll")
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .spawn()
+                .expect("Failed");
+        }
+        _ => std::process::exit(0),
+    }
 }
 
 fn main() {
@@ -78,13 +130,20 @@ fn main() {
                     .prompt()
                     .unwrap_or_else(|_| std::process::exit(0));
             match system_choice {
-                MenuInsideMenu::Linux => {
-                    Command::new("wget")
-                        .arg("https://ziglang.org/builds/zig-macos-x86_64-0.14.0-dev.321+888708ec8.tar.xz")
-                        .output()
-                        .expect("Failed");
+                MenuInsideMenu::Linux => get_latest("linux"),
+                MenuInsideMenu::Mac => {
+                    let archi = Select::new(
+                        "Select your architecture",
+                        Architecture::VARIANTS_MORE_MORE.to_vec(),
+                    )
+                    .with_page_size(9)
+                    .prompt()
+                    .unwrap_or_else(|_| std::process::exit(0));
+                    match archi {
+                        Architecture::x86_64_macos => get_latest("x86"),
+                        Architecture::aarch64_macos => get_latest("arm"),
+                    }
                 }
-                MenuInsideMenu::Mac => get_latest(),
             }
         }
     }

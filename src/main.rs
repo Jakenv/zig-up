@@ -1,7 +1,10 @@
 use core::fmt;
-use std::{io, process::Command};
+use serde::Deserialize;
+use std::{fmt::Result, process::Command};
 
 use inquire::Select;
+
+const ZIG_LINK: &str = "https://ziglang.org/download/index.json";
 
 #[derive(Debug, Copy, Clone)]
 enum Menu {
@@ -39,6 +42,29 @@ impl fmt::Display for MenuInsideMenu {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct Obj {
+    master: Master,
+}
+
+#[derive(Debug, Deserialize)]
+struct Master {
+    version: String,
+    #[serde(rename = "x86_64-macos")]
+    x86_64_macos: Platform,
+}
+
+#[derive(Deserialize, Debug)]
+struct Platform {
+    tarball: String,
+}
+
+fn get_latest() {
+    let response = reqwest::blocking::get(ZIG_LINK).unwrap();
+    let var: Obj = response.json().unwrap();
+    println!("{:#?}", var);
+}
+
 fn main() {
     let choice: Menu = Select::new("Select your action:", Menu::VARIANTS.to_vec())
         .with_page_size(9)
@@ -58,7 +84,7 @@ fn main() {
                         .output()
                         .expect("Failed");
                 }
-                MenuInsideMenu::Mac => println!("Yay"),
+                MenuInsideMenu::Mac => get_latest(),
             }
         }
     }

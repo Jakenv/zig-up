@@ -92,14 +92,12 @@ fn call_wget(target: &String) {
     Command::new("wget")
         .arg(target)
         .args(["-P", "/tmp/"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
         .spawn()
         .expect("Failed");
 }
 
 fn utar_bin(target: String) -> Result<(), std::io::Error> {
-    let mut install_path = String::new();
+    let mut install_path = String::from("~/.zig/");
     let ans = Confirm::new("Want to unwrap to default?")
         .with_default(true)
         .with_help_message("Default is ~/.zig/")

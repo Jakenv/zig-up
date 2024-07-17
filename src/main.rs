@@ -1,11 +1,18 @@
 use core::fmt;
+use inquire::{Confirm, Select};
 use serde::Deserialize;
-use std::process::{Command, Stdio};
-
-use inquire::Select;
+use std::{
+    fs::File,
+    io::{self, BufReader},
+    path::Path,
+    process::{Command, Stdio},
+};
+use tar::Archive;
+use xz::bufread::XzDecoder;
 
 const ZIG_LINK: &str = "https://ziglang.org/download/index.json";
 
+// TODO add Zls or other stuff
 #[derive(Debug, Copy, Clone)]
 enum Menu {
     Zig,
@@ -30,7 +37,7 @@ enum MenuInsideMenu {
 }
 
 impl MenuInsideMenu {
-    const VARIANTS_MORE: &'static [MenuInsideMenu] = &[Self::Linux, Self::Mac];
+    const SYSTEMS: &'static [MenuInsideMenu] = &[Self::Linux, Self::Mac];
 }
 
 impl fmt::Display for MenuInsideMenu {
@@ -42,7 +49,6 @@ impl fmt::Display for MenuInsideMenu {
     }
 }
 
-#[warn(non_camel_case_types)]
 #[derive(Debug, Copy, Clone)]
 enum Architecture {
     x86_64_macos,
@@ -50,7 +56,7 @@ enum Architecture {
 }
 
 impl Architecture {
-    const VARIANTS_MORE_MORE: &'static [Architecture] = &[Self::x86_64_macos, Self::aarch64_macos];
+    const ARCHI: &'static [Architecture] = &[Self::x86_64_macos, Self::aarch64_macos];
 }
 
 impl fmt::Display for Architecture {
@@ -82,36 +88,61 @@ struct Platform {
     tarball: String,
 }
 
+fn call_wget(target: &String) {
+    Command::new("wget")
+        .arg(target)
+        .args(["-P", "/tmp/"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .spawn()
+        .expect("Failed");
+}
+
+fn utar_bin(target: String) -> Result<(), std::io::Error> {
+    let mut install_path = String::new();
+    let ans = Confirm::new("Want to unwrap to default?")
+        .with_default(true)
+        .with_help_message("Default is ~/.zig/")
+        .prompt();
+    match ans {
+        Ok(true) => install_path = String::from("~/.zig/"),
+        Ok(false) => {
+            io::stdin()
+                .read_line(&mut install_path)
+                .expect("Failed to read line");
+        }
+        Err(_) => install_path = String::from("~/.zig/"),
+    }
+
+    let zig_tar: Vec<&str> = target.split("builds/").collect();
+    if let Some(tar_zig) = zig_tar.get(1) {
+        let path = Path::new("/tmp/").join(tar_zig).canonicalize()?;
+        let file = File::open(path)?;
+
+        let tar = XzDecoder::new(BufReader::new(file));
+        let mut utar = Archive::new(tar);
+        Ok(utar.unpack(install_path)?)
+    } else {
+        panic!("chuj");
+    }
+}
+
 fn get_latest(archi: &str) {
+    // TODO Make it async
     let response = reqwest::blocking::get(ZIG_LINK).unwrap();
     let var: Obj = response.json().unwrap();
     match archi {
         "linux" => {
-            Command::new("wget")
-                .arg(var.master.x86_64_linux.tarball)
-                .arg("--progress=bar:force:noscroll")
-                .stdin(Stdio::null())
-                .stdout(Stdio::inherit())
-                .spawn()
-                .expect("Failed");
+            call_wget(&var.master.x86_64_linux.tarball);
+            let _ = utar_bin(var.master.x86_64_linux.tarball);
         }
         "x86" => {
-            Command::new("wget")
-                .arg(var.master.x86_64_macos.tarball)
-                .arg("--progress=bar:force:noscroll")
-                .stdin(Stdio::null())
-                .stdout(Stdio::inherit())
-                .spawn()
-                .expect("Failed");
+            call_wget(&var.master.x86_64_macos.tarball);
+            let _ = utar_bin(var.master.x86_64_macos.tarball);
         }
         "arm" => {
-            Command::new("wget")
-                .arg(var.master.aarch64_macos.tarball)
-                .arg("--progress=bar:force:noscroll")
-                .stdin(Stdio::null())
-                .stdout(Stdio::inherit())
-                .spawn()
-                .expect("Failed");
+            call_wget(&var.master.aarch64_macos.tarball);
+            let _ = utar_bin(var.master.aarch64_macos.tarball);
         }
         _ => std::process::exit(0),
     }
@@ -125,20 +156,18 @@ fn main() {
     match choice {
         Menu::Zig => {
             let system_choice: MenuInsideMenu =
-                Select::new("Select your system", MenuInsideMenu::VARIANTS_MORE.to_vec())
+                Select::new("Select your system", MenuInsideMenu::SYSTEMS.to_vec())
                     .with_page_size(9)
                     .prompt()
                     .unwrap_or_else(|_| std::process::exit(0));
             match system_choice {
                 MenuInsideMenu::Linux => get_latest("linux"),
                 MenuInsideMenu::Mac => {
-                    let archi = Select::new(
-                        "Select your architecture",
-                        Architecture::VARIANTS_MORE_MORE.to_vec(),
-                    )
-                    .with_page_size(9)
-                    .prompt()
-                    .unwrap_or_else(|_| std::process::exit(0));
+                    let archi =
+                        Select::new("Select your architecture", Architecture::ARCHI.to_vec())
+                            .with_page_size(9)
+                            .prompt()
+                            .unwrap_or_else(|_| std::process::exit(0));
                     match archi {
                         Architecture::x86_64_macos => get_latest("x86"),
                         Architecture::aarch64_macos => get_latest("arm"),

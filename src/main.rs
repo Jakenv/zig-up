@@ -1,11 +1,13 @@
 use core::fmt;
 use inquire::{Confirm, Select};
 use serde::Deserialize;
+use simple_home_dir::home_dir;
 use std::{
+    env,
     fs::File,
     io::{self, BufReader},
     path::Path,
-    process::{Command, Stdio},
+    process::{exit, Command},
 };
 use tar::Archive;
 use xz::bufread::XzDecoder;
@@ -97,20 +99,23 @@ fn call_wget(target: &String) {
 }
 
 fn utar_bin(target: String) -> Result<(), std::io::Error> {
-    let mut install_path = String::from("~/.zig/");
+    let home = home_dir().unwrap();
+    let mut install_path = String::from(home.to_string_lossy() + "/.zig/");
     let ans = Confirm::new("Want to unwrap to default?")
         .with_default(true)
-        .with_help_message("Default is ~/.zig/")
+        .with_help_message(&install_path)
         .prompt();
     match ans {
-        Ok(true) => install_path = String::from("~/.zig/"),
+        Ok(true) => (),
         Ok(false) => {
             io::stdin()
                 .read_line(&mut install_path)
                 .expect("Failed to read line");
         }
-        Err(_) => install_path = String::from("~/.zig/"),
+        Err(_) => exit(1),
     }
+
+    call_wget(&target);
 
     let zig_tar: Vec<&str> = target.split("builds/").collect();
     if let Some(tar_zig) = zig_tar.get(1) {
@@ -119,9 +124,11 @@ fn utar_bin(target: String) -> Result<(), std::io::Error> {
 
         let tar = XzDecoder::new(BufReader::new(file));
         let mut utar = Archive::new(tar);
+
+        assert!(env::set_current_dir(&install_path).is_ok());
         Ok(utar.unpack(install_path)?)
     } else {
-        panic!("chuj");
+        panic!("Error while untaring archive");
     }
 }
 
@@ -131,16 +138,13 @@ fn get_latest(archi: &str) {
     let var: Obj = response.json().unwrap();
     match archi {
         "linux" => {
-            call_wget(&var.master.x86_64_linux.tarball);
-            let _ = utar_bin(var.master.x86_64_linux.tarball);
+            utar_bin(var.master.x86_64_linux.tarball).unwrap_or_else(|_| exit(0));
         }
         "x86" => {
-            call_wget(&var.master.x86_64_macos.tarball);
-            let _ = utar_bin(var.master.x86_64_macos.tarball);
+            utar_bin(var.master.x86_64_macos.tarball).unwrap_or_else(|_| exit(0));
         }
         "arm" => {
-            call_wget(&var.master.aarch64_macos.tarball);
-            let _ = utar_bin(var.master.aarch64_macos.tarball);
+            utar_bin(var.master.aarch64_macos.tarball).unwrap_or_else(|_| exit(0));
         }
         _ => std::process::exit(0),
     }

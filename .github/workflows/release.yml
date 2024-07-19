@@ -16,7 +16,7 @@ jobs:
             archive: tar.gz tar.xz tar.zst
     steps:
       - name: Install ligma 
-        run: sudo apt-get update && sudo apt-get install -y libzma-dev
+        run: sudo apt-get update && sudo apt-get install -y libdevel
       - uses: actions/checkout@master
       - name: Compile and release
         uses: rust-build/rust-build.action@v1.4.5

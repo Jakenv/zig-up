@@ -3,9 +3,8 @@ use inquire::{Confirm, Select};
 use serde::Deserialize;
 use simple_home_dir::home_dir;
 use std::{
-    env,
-    fs::File,
-    io::{self, BufReader},
+    fs::{self, File},
+    io::BufReader,
     path::Path,
     process::{exit, Command},
 };
@@ -53,19 +52,19 @@ impl fmt::Display for MenuInsideMenu {
 
 #[derive(Debug, Copy, Clone)]
 enum Architecture {
-    x86_64_macos,
-    aarch64_macos,
+    X86_64Macos,
+    Aarch64Macos,
 }
 
 impl Architecture {
-    const ARCHI: &'static [Architecture] = &[Self::x86_64_macos, Self::aarch64_macos];
+    const ARCHI: &'static [Architecture] = &[Self::X86_64Macos, Self::Aarch64Macos];
 }
 
 impl fmt::Display for Architecture {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Self::x86_64_macos => write!(f, "x86_64-macos"),
-            Self::aarch64_macos => write!(f, "aarch64_macos"),
+            Self::X86_64Macos => write!(f, "x86_64-macos"),
+            Self::Aarch64Macos => write!(f, "aarch64_macos"),
         }
     }
 }
@@ -94,13 +93,15 @@ fn call_wget(target: &String) {
     Command::new("wget")
         .arg(target)
         .args(["-P", "/tmp/"])
+        .arg("-q")
         .spawn()
-        .expect("Failed");
+        .expect("Won't fail");
 }
 
 fn utar_bin(target: String) -> Result<(), std::io::Error> {
     let home = home_dir().unwrap();
-    let mut install_path = String::from(home.to_string_lossy() + "/.zig/");
+    let install_path = String::from(home.to_string_lossy() + "/.zig/");
+
     let ans = Confirm::new("Want to unwrap to default?")
         .with_default(true)
         .with_help_message(&install_path)
@@ -108,9 +109,9 @@ fn utar_bin(target: String) -> Result<(), std::io::Error> {
     match ans {
         Ok(true) => (),
         Ok(false) => {
-            io::stdin()
-                .read_line(&mut install_path)
-                .expect("Failed to read line");
+            println!("You can find tar in /tmp/ then");
+            call_wget(&target);
+            exit(0);
         }
         Err(_) => exit(1),
     }
@@ -125,7 +126,7 @@ fn utar_bin(target: String) -> Result<(), std::io::Error> {
         let tar = XzDecoder::new(BufReader::new(file));
         let mut utar = Archive::new(tar);
 
-        assert!(env::set_current_dir(&install_path).is_ok());
+        fs::create_dir(&install_path)?;
         Ok(utar.unpack(install_path)?)
     } else {
         panic!("Error while untaring archive");
@@ -138,30 +139,33 @@ fn get_latest(archi: &str) {
     let var: Obj = response.json().unwrap();
     match archi {
         "linux" => {
-            utar_bin(var.master.x86_64_linux.tarball).unwrap_or_else(|_| exit(0));
+            utar_bin(var.master.x86_64_linux.tarball).unwrap_or_else(|e| println!("{}", e));
         }
         "x86" => {
-            utar_bin(var.master.x86_64_macos.tarball).unwrap_or_else(|_| exit(0));
+            utar_bin(var.master.x86_64_macos.tarball).unwrap_or_else(|e| println!("{}", e));
         }
         "arm" => {
-            utar_bin(var.master.aarch64_macos.tarball).unwrap_or_else(|_| exit(0));
+            utar_bin(var.master.aarch64_macos.tarball).unwrap_or_else(|e| println!("{}", e));
         }
-        _ => std::process::exit(0),
+        _ => exit(1),
     }
 }
 
 fn main() {
+    let cmd = Command::new("wget");
+    assert_eq!(cmd.get_program(), "wget");
+
     let choice: Menu = Select::new("Select your action:", Menu::VARIANTS.to_vec())
         .with_page_size(9)
         .prompt()
-        .unwrap_or_else(|_| std::process::exit(0));
+        .unwrap_or_else(|_| exit(0));
     match choice {
         Menu::Zig => {
             let system_choice: MenuInsideMenu =
                 Select::new("Select your system", MenuInsideMenu::SYSTEMS.to_vec())
                     .with_page_size(9)
                     .prompt()
-                    .unwrap_or_else(|_| std::process::exit(0));
+                    .unwrap_or_else(|_| exit(0));
             match system_choice {
                 MenuInsideMenu::Linux => get_latest("linux"),
                 MenuInsideMenu::Mac => {
@@ -169,10 +173,10 @@ fn main() {
                         Select::new("Select your architecture", Architecture::ARCHI.to_vec())
                             .with_page_size(9)
                             .prompt()
-                            .unwrap_or_else(|_| std::process::exit(0));
+                            .unwrap_or_else(|_| exit(0));
                     match archi {
-                        Architecture::x86_64_macos => get_latest("x86"),
-                        Architecture::aarch64_macos => get_latest("arm"),
+                        Architecture::X86_64Macos => get_latest("x86"),
+                        Architecture::Aarch64Macos => get_latest("arm"),
                     }
                 }
             }

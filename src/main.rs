@@ -1,4 +1,5 @@
 use core::fmt;
+use error_chain::error_chain;
 use inquire::{Confirm, Select};
 use serde::Deserialize;
 use simple_home_dir::home_dir;
@@ -6,7 +7,7 @@ use std::{
     fs::{self, File},
     io::BufReader,
     path::Path,
-    process::{exit, Command},
+    process::exit,
 };
 use tar::Archive;
 use xz::bufread::XzDecoder;
@@ -17,18 +18,16 @@ const ZIG_LINK: &str = "https://ziglang.org/download/index.json";
 #[derive(Debug, Copy, Clone)]
 enum Menu {
     Zig,
-    Zls,
 }
 
 impl Menu {
-    const VARIANTS: &'static [Menu] = &[Self::Zig, Self::Zls];
+    const VARIANTS: &'static [Menu] = &[Self::Zig];
 }
 
 impl fmt::Display for Menu {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Self::Zig => write!(f, "Dowload latest Zig binary"),
-            Self::Zls => write!(f, "Dowload Zls latest commit"),
         }
     }
 }
@@ -91,16 +90,35 @@ struct Platform {
     tarball: String,
 }
 
-fn call_wget(target: &String) {
-    Command::new("wget")
-        .arg(target)
-        .args(["-P", "/tmp/"])
-        .arg("-q")
-        .spawn()
-        .expect("Won't fail");
+error_chain! {
+    foreign_links {
+        Io(std::io::Error);
+        HttpRequest(reqwest::Error);
+    }
 }
 
-fn utar_bin(target: String) -> Result<(), std::io::Error> {
+async fn download_tar(target: &String) -> Result<()> {
+    let tmp_path = Path::new("/tmp/");
+    let response = reqwest::get(target).await?;
+
+    let mut dest = {
+        let fname = response
+            .url()
+            .path_segments()
+            .and_then(|segments| segments.last())
+            .and_then(|name| if name.is_empty() { None } else { Some(name) })
+            .unwrap_or("tmp.bin");
+        let fname = tmp_path.join(fname);
+        File::create(fname)?
+    };
+    let content = response.bytes().await?;
+    let mut content_cursos = std::io::Cursor::new(content);
+
+    std::io::copy(&mut content_cursos, &mut dest)?;
+    Ok(())
+}
+
+async fn utar_bin(target: String) -> Result<()> {
     let home = home_dir().unwrap();
     let install_path = String::from(home.to_string_lossy() + "/.zig/");
 
@@ -112,13 +130,13 @@ fn utar_bin(target: String) -> Result<(), std::io::Error> {
         Ok(true) => (),
         Ok(false) => {
             println!("You can find tar in /tmp/ then");
-            call_wget(&target);
+            download_tar(&target).await?;
             exit(0);
         }
         Err(_) => exit(1),
     }
 
-    call_wget(&target);
+    download_tar(&target).await?;
 
     let zig_tar: Vec<&str> = target.split("builds/").collect();
     if let Some(tar_zig) = zig_tar.get(1) {
@@ -128,7 +146,7 @@ fn utar_bin(target: String) -> Result<(), std::io::Error> {
         let tar = XzDecoder::new(BufReader::new(file));
         let mut utar = Archive::new(tar);
 
-        if !Path::new(&install_path).exists() {
+        if !Path::new(&install_path).try_exists()? {
             fs::create_dir(&install_path)?;
         }
         Ok(utar.unpack(install_path)?)
@@ -137,51 +155,56 @@ fn utar_bin(target: String) -> Result<(), std::io::Error> {
     }
 }
 
-fn get_latest(archi: &str) {
-    // TODO Make it async
-    let response = reqwest::blocking::get(ZIG_LINK).unwrap();
-    let var: Obj = response.json().unwrap();
+async fn get_latest(archi: &str) {
+    let response = reqwest::get(ZIG_LINK).await.unwrap();
+    let var: Obj = response.json().await.unwrap();
     match archi {
         "linux" => {
-            utar_bin(var.master.x86_64_linux.tarball).unwrap_or_else(|e| println!("{}", e));
+            utar_bin(var.master.x86_64_linux.tarball)
+                .await
+                .unwrap_or_else(|e| println!("{}", e));
         }
         "x86" => {
-            utar_bin(var.master.x86_64_macos.tarball).unwrap_or_else(|e| println!("{}", e));
+            utar_bin(var.master.x86_64_macos.tarball)
+                .await
+                .unwrap_or_else(|e| println!("{}", e));
         }
         "arm" => {
-            utar_bin(var.master.aarch64_macos.tarball).unwrap_or_else(|e| println!("{}", e));
+            utar_bin(var.master.aarch64_macos.tarball)
+                .await
+                .unwrap_or_else(|e| println!("{}", e));
         }
         _ => exit(1),
     }
 }
 
-fn main() {
-    let cmd = Command::new("wget");
-    assert_eq!(cmd.get_program(), "wget");
-
+#[tokio::main]
+async fn main() {
     let choice: Menu = Select::new("Select your action:", Menu::VARIANTS.to_vec())
         .with_page_size(9)
         .prompt()
         .unwrap_or_else(|_| exit(0));
+
     match choice {
-        Menu::Zls => println!("Not yet done"),
         Menu::Zig => {
             let system_choice: MenuInsideMenu =
                 Select::new("Select your system", MenuInsideMenu::SYSTEMS.to_vec())
                     .with_page_size(9)
                     .prompt()
                     .unwrap_or_else(|_| exit(0));
+
             match system_choice {
-                MenuInsideMenu::Linux => get_latest("linux"),
+                MenuInsideMenu::Linux => get_latest("linux").await,
                 MenuInsideMenu::Mac => {
                     let archi =
                         Select::new("Select your architecture", Architecture::ARCHI.to_vec())
                             .with_page_size(9)
                             .prompt()
                             .unwrap_or_else(|_| exit(0));
+
                     match archi {
-                        Architecture::X86_64Macos => get_latest("x86"),
-                        Architecture::Aarch64Macos => get_latest("arm"),
+                        Architecture::X86_64Macos => get_latest("x86").await,
+                        Architecture::Aarch64Macos => get_latest("arm").await,
                     }
                 }
             }

@@ -1,12 +1,14 @@
 [package]
 name = "zig-up"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2021"
 
 [dependencies]
+error-chain = "0.12.4"
 inquire = "0.7.5"
-reqwest = { version = "0.12.5", features = ["blocking", "json"] }
+reqwest = { version = "0.12.5", features = ["json"] }
 serde = { version = "1.0.204", features = ["derive"] }
-simple-home-dir = "0.3.5"
+simple-home-dir = "0.4.0"
 tar = "0.4.41"
+tokio = { version = "1.38.1", features = ["macros", "rt-multi-thread"] }
 xz = "0.1.0"

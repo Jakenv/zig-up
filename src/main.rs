@@ -5,7 +5,7 @@ use simple_home_dir::home_dir;
 use std::{
     fs::{self, File},
     io::BufReader,
-    path::{Path, PathBuf},
+    path::Path,
     process::{exit, Command},
 };
 use tar::Archive;

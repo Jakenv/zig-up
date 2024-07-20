@@ -5,7 +5,7 @@ use simple_home_dir::home_dir;
 use std::{
     fs::{self, File},
     io::BufReader,
-    path::Path,
+    path::{Path, PathBuf},
     process::{exit, Command},
 };
 use tar::Archive;
@@ -126,7 +126,9 @@ fn utar_bin(target: String) -> Result<(), std::io::Error> {
         let tar = XzDecoder::new(BufReader::new(file));
         let mut utar = Archive::new(tar);
 
-        fs::create_dir(&install_path)?;
+        if !Path::new(&install_path).exists() {
+            fs::create_dir(&install_path)?;
+        }
         Ok(utar.unpack(install_path)?)
     } else {
         panic!("Error while untaring archive");

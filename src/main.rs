@@ -17,16 +17,18 @@ const ZIG_LINK: &str = "https://ziglang.org/download/index.json";
 #[derive(Debug, Copy, Clone)]
 enum Menu {
     Zig,
+    Zls,
 }
 
 impl Menu {
-    const VARIANTS: &'static [Menu] = &[Self::Zig];
+    const VARIANTS: &'static [Menu] = &[Self::Zig, Self::Zls];
 }
 
 impl fmt::Display for Menu {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Self::Zig => write!(f, "Dowload latest Zig binary"),
+            Self::Zls => write!(f, "Dowload Zls latest commit"),
         }
     }
 }
@@ -160,6 +162,7 @@ fn main() {
         .prompt()
         .unwrap_or_else(|_| exit(0));
     match choice {
+        Menu::Zls => println!("Not yet done"),
         Menu::Zig => {
             let system_choice: MenuInsideMenu =
                 Select::new("Select your system", MenuInsideMenu::SYSTEMS.to_vec())

@@ -121,23 +121,29 @@ async fn download_tar(target: &String) -> Result<()> {
 async fn utar_bin(target: String) -> Result<()> {
     let home = home_dir().unwrap();
     let install_path = String::from(home.to_string_lossy() + "/.zig/");
+    if !confirm_unpack(&install_path)? {
+        println!("You can find tar in /tmp/ then");
+        download_tar(&target).await?;
+        exit(0);
+    }
+    download_tar(&target).await?;
+    extract_tarball(&target, &install_path)?;
+    Ok(())
+}
 
+fn confirm_unpack(install_path: &str) -> Result<bool> {
     let ans = Confirm::new("Want to unwrap to default?")
         .with_default(true)
-        .with_help_message(&install_path)
+        .with_help_message(install_path)
         .prompt();
     match ans {
-        Ok(true) => (),
-        Ok(false) => {
-            println!("You can find tar in /tmp/ then");
-            download_tar(&target).await?;
-            exit(0);
-        }
+        Ok(true) => Ok(true),
+        Ok(false) => Ok(false),
         Err(_) => exit(1),
     }
+}
 
-    download_tar(&target).await?;
-
+fn extract_tarball(target: &str, install_path: &str) -> Result<()> {
     let zig_tar: Vec<&str> = target.split("builds/").collect();
     if let Some(tar_zig) = zig_tar.get(1) {
         let path = Path::new("/tmp/").join(tar_zig).canonicalize()?;
@@ -147,12 +153,13 @@ async fn utar_bin(target: String) -> Result<()> {
         let mut utar = Archive::new(tar);
 
         if !Path::new(&install_path).try_exists()? {
-            fs::create_dir(&install_path)?;
+            fs::create_dir(install_path)?;
         }
-        Ok(utar.unpack(install_path)?)
+        utar.unpack(install_path)?
     } else {
         panic!("Error while untaring archive");
     }
+    Ok(())
 }
 
 async fn get_latest(archi: &str) {
@@ -164,13 +171,13 @@ async fn get_latest(archi: &str) {
                 .await
                 .unwrap_or_else(|e| println!("{}", e));
         }
-        "x86" => {
-            utar_bin(var.master.x86_64_macos.tarball)
+        "arm" => {
+            utar_bin(var.master.aarch64_macos.tarball)
                 .await
                 .unwrap_or_else(|e| println!("{}", e));
         }
-        "arm" => {
-            utar_bin(var.master.aarch64_macos.tarball)
+        "x86" => {
+            utar_bin(var.master.x86_64_macos.tarball)
                 .await
                 .unwrap_or_else(|e| println!("{}", e));
         }
@@ -203,8 +210,8 @@ async fn main() {
                             .unwrap_or_else(|_| exit(0));
 
                     match archi {
-                        Architecture::X86_64Macos => get_latest("x86").await,
                         Architecture::Aarch64Macos => get_latest("arm").await,
+                        Architecture::X86_64Macos => get_latest("x86").await,
                     }
                 }
             }

@@ -1,6 +1,6 @@
-# Zig-up (in Rust)
+# Zig-up
 
- Small and badly written CLI app to help me download and unpack latest Zig binary
+ Small and badly written CLI app to help me download and unpack latest Zig binary, written in Rust for the luls
 
 ![lol](extra/meme.png)
 

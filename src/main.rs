@@ -1,5 +1,5 @@
 use core::fmt;
-use error_chain::error_chain;
+use thiserror::Error;
 use inquire::{Confirm, Select};
 use serde::Deserialize;
 use simple_home_dir::home_dir;
@@ -17,7 +17,7 @@ const ZIG_LINK: &str = "https://ziglang.org/download/index.json";
 // TODO add Zls or other stuff
 #[derive(Debug, Copy, Clone)]
 enum Menu {
-    Zig,
+    Zig
 }
 
 impl Menu {
@@ -90,14 +90,16 @@ struct Platform {
     tarball: String,
 }
 
-error_chain! {
-    foreign_links {
-        Io(std::io::Error);
-        HttpRequest(reqwest::Error);
-    }
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("HTTP error: {0}")]
+    HttpRequest(#[from] reqwest::Error),
 }
 
-async fn download_tar(target: &String) -> Result<()> {
+async fn download_tar(target: &String) -> Result<(), Error> {
     let tmp_path = Path::new("/tmp/");
     let response = reqwest::get(target).await?;
 
@@ -118,7 +120,7 @@ async fn download_tar(target: &String) -> Result<()> {
     Ok(())
 }
 
-async fn utar_bin(target: String) -> Result<()> {
+async fn utar_bin(target: String) -> Result<(), Error> {
     let home = home_dir().unwrap();
     let install_path = String::from(home.to_string_lossy() + "/.zig/");
     if !confirm_unpack(&install_path)? {
@@ -131,7 +133,7 @@ async fn utar_bin(target: String) -> Result<()> {
     Ok(())
 }
 
-fn confirm_unpack(install_path: &str) -> Result<bool> {
+fn confirm_unpack(install_path: &str) -> Result<bool, Error> {
     let ans = Confirm::new("Want to unwrap to default?")
         .with_default(true)
         .with_help_message(install_path)
@@ -143,7 +145,7 @@ fn confirm_unpack(install_path: &str) -> Result<bool> {
     }
 }
 
-fn extract_tarball(target: &str, install_path: &str) -> Result<()> {
+fn extract_tarball(target: &str, install_path: &str) -> Result<(), Error> {
     let zig_tar: Vec<&str> = target.split("builds/").collect();
     if let Some(tar_zig) = zig_tar.get(1) {
         let path = Path::new("/tmp/").join(tar_zig).canonicalize()?;

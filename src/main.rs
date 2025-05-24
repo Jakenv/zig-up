@@ -1,33 +1,37 @@
+use anyhow::anyhow;
 use core::fmt;
 use thiserror::Error;
+use futures_util::{future, StreamExt};
 use inquire::{Confirm, Select};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use simple_home_dir::home_dir;
 use std::{
-    fs::{self, File},
-    io::BufReader,
-    path::Path,
-    process::exit,
+    fs::{self, File}, io::{BufReader, BufWriter, Write}, path::{Path, PathBuf}, process::exit, time::Duration
 };
+use tokio::sync::OnceCell;
 use tar::Archive;
 use xz::bufread::XzDecoder;
 
 const ZIG_LINK: &str = "https://ziglang.org/download/index.json";
+static PROGRESS_BAR_STYLE: OnceCell<ProgressStyle> = OnceCell::const_new();
 
 // TODO add Zls or other stuff
 #[derive(Debug, Copy, Clone)]
 enum Menu {
-    Zig
+    Zig,
+    Quit,
 }
 
 impl Menu {
-    const VARIANTS: &'static [Menu] = &[Self::Zig];
+    const VARIANTS: &'static [Menu] = &[Self::Zig, Self::Quit];
 }
 
 impl fmt::Display for Menu {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Self::Zig => write!(f, "Dowload latest Zig binary"),
+            Self::Quit => write!(f, "Quit"),
         }
     }
 }
@@ -97,39 +101,53 @@ pub enum Error {
 
     #[error("HTTP error: {0}")]
     HttpRequest(#[from] reqwest::Error),
+
+    #[error("Anyhow error: {0}")]
+    Anyhow(#[from] anyhow::Error),
 }
 
-async fn download_tar(target: &String) -> Result<(), Error> {
+async fn download_tar(target: &str) -> Result<PathBuf, Error> {
     let tmp_path = Path::new("/tmp/");
     let response = reqwest::get(target).await?;
+    let total_size = response
+        .content_length()
+        .ok_or_else(|| anyhow!("Missing content lenght!"))?;
 
-    let mut dest = {
-        let fname = response
-            .url()
-            .path_segments()
-            .and_then(|segments| segments.last())
-            .and_then(|name| if name.is_empty() { None } else { Some(name) })
-            .unwrap_or("tmp.bin");
-        let fname = tmp_path.join(fname);
-        File::create(fname)?
-    };
-    let content = response.bytes().await?;
-    let mut content_cursos = std::io::Cursor::new(content);
+    let filename = response
+        .url()
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("tmp.bin");
 
-    std::io::copy(&mut content_cursos, &mut dest)?;
-    Ok(())
+    let filepath = tmp_path.join(filename);
+    let file = File::create(&filepath)?;
+    let mut dest = BufWriter::new(file);
+
+    let pb = ProgressBar::new(total_size);
+    pb.set_style(get_bar_style().await);
+
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        pb.inc(chunk.len() as u64);
+        dest.write_all(&chunk)?;
+    }
+    pb.finish_with_message("Download complete");
+
+    Ok(filepath)
 }
 
 async fn utar_bin(target: String) -> Result<(), Error> {
     let home = home_dir().unwrap();
     let install_path = String::from(home.to_string_lossy() + "/.zig/");
     if !confirm_unpack(&install_path)? {
-        println!("You can find tar in /tmp/ then");
         download_tar(&target).await?;
+        println!("You can find tar in /tmp/ then");
         exit(0);
     }
-    download_tar(&target).await?;
-    extract_tarball(&target, &install_path)?;
+    let tar_path = download_tar(&target).await?;
+    extract_tarball(&install_path, tar_path)?;
     Ok(())
 }
 
@@ -145,23 +163,38 @@ fn confirm_unpack(install_path: &str) -> Result<bool, Error> {
     }
 }
 
-fn extract_tarball(target: &str, install_path: &str) -> Result<(), Error> {
-    let zig_tar: Vec<&str> = target.split("builds/").collect();
-    if let Some(tar_zig) = zig_tar.get(1) {
-        let path = Path::new("/tmp/").join(tar_zig).canonicalize()?;
-        let file = File::open(path)?;
+fn extract_tarball(install_path: &str, tar_path: PathBuf) -> Result<(), Error> {
+    let file = File::open(tar_path)?;
+    let tar = XzDecoder::new(BufReader::new(file));
+    let mut utar = Archive::new(tar);
 
-        let tar = XzDecoder::new(BufReader::new(file));
-        let mut utar = Archive::new(tar);
-
-        if !Path::new(&install_path).try_exists()? {
-            fs::create_dir(install_path)?;
-        }
-        utar.unpack(install_path)?
-    } else {
-        panic!("Error while untaring archive");
+    if !Path::new(&install_path).try_exists()? {
+        fs::create_dir(install_path)?;
     }
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{msg}\n{spinner:.green} [{elapsed_precise}] Extracting...")
+            .unwrap()
+    );
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    for entry in utar.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.display().to_string();
+        pb.set_message(format!("Extracting: {path}"));
+        entry.unpack_in(install_path)?;
+    }
+    pb.finish_with_message("Extraction complete");
     Ok(())
+}
+
+async fn get_bar_style() -> ProgressStyle {
+    PROGRESS_BAR_STYLE.get_or_init(|| {
+        future::ready(ProgressStyle::default_bar()
+            .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec})").unwrap()
+            .progress_chars("#>-"))
+    }).await.clone()
 }
 
 async fn get_latest(archi: &str) {
@@ -217,6 +250,9 @@ async fn main() {
                     }
                 }
             }
+        },
+        Menu::Quit => {
+            exit(0)
         }
     }
 }
